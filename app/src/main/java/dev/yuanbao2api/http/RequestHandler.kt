@@ -90,18 +90,55 @@ class RequestHandler(
         writer.endChunked()
     }
 
+    // 上下文预算：网页输入框承载有限，超了会塞爆。滑动窗口 + 总字符裁剪。
+    private val maxTotalChars = 6000      // 总字符上限
+    private val maxRounds = 12            // 最多保留最近 N 条非 system 消息
+    private val maxSingleMsgChars = 3000  // 单条消息字符上限
+
+    private data class Msg(val role: String, val content: String)
+
     private fun buildPrompt(body: JSONObject): String {
         val messages = body.optJSONArray("messages") ?: return ""
-        val sb = StringBuilder()
+
+        val all = ArrayList<Msg>()
         for (i in 0 until messages.length()) {
             val m = messages.optJSONObject(i) ?: continue
             val role = m.optString("role", "user")
             val content = m.optString("content")
             if (content.isEmpty()) continue
-            when (role) {
-                "system" -> sb.append("[system] ").append(content).append("\n")
-                "assistant" -> sb.append("[assistant] ").append(content).append("\n")
-                else -> sb.append(content).append("\n")
+            all.add(Msg(role, content))
+        }
+        if (all.isEmpty()) return ""
+
+        // system 消息优先保留（人设/设定），其余取最近 maxRounds 条
+        val systems = all.filter { it.role == "system" }
+        val others = all.filter { it.role != "system" }
+        val tail = if (others.size > maxRounds) others.subList(others.size - maxRounds, others.size) else others
+
+        fun trim(s: String): String =
+            if (s.length > maxSingleMsgChars) s.substring(0, maxSingleMsgChars) + "…" else s
+
+        val kept = ArrayList<Msg>()
+        kept.addAll(systems)
+        kept.addAll(tail)
+
+        // 总长超预算时，从最旧的非 system 消息开始丢，绝不丢 system
+        while (true) {
+            var total = 0
+            for (m in kept) total += trim(m.content).length + m.role.length + 4
+            if (total <= maxTotalChars) break
+            val idx = kept.indexOfFirst { it.role != "system" }
+            if (idx < 0) break
+            kept.removeAt(idx)
+        }
+
+        val sb = StringBuilder()
+        for (m in kept) {
+            val c = trim(m.content)
+            when (m.role) {
+                "system" -> sb.append("[system] ").append(c).append("\n")
+                "assistant" -> sb.append("[assistant] ").append(c).append("\n")
+                else -> sb.append(c).append("\n")
             }
         }
         return sb.toString().trim()
