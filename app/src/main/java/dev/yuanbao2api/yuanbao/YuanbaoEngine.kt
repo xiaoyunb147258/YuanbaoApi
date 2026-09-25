@@ -116,26 +116,41 @@ class YuanbaoEngine private constructor(private val context: Context) {
         }
     }
 
-    fun send(prompt: String, listener: Listener): String {
+    fun send(prompt: String, listener: Listener, model: String? = null): String {
         val rid = "r" + seq.incrementAndGet()
         synchronized(pending) { pending[rid] = PendingReq(rid, listener) }
         handler.post {
             val q = JSONObject.quote(prompt)
-            // 已验证可用：逐字符派发完整键盘事件序列写入 Quill，再派发 Enter 发送
-            val js = "(function(){var b=document.querySelector('.ql-editor');" +
+            val m = JSONObject.quote(model ?: "")
+            // 输入框选择器容错：Quill(.ql-editor) → contenteditable → textarea
+            // 若传了 model，先在下拉/菜单里按名称模糊匹配点选（尽力而为，失败不阻塞）
+            val js = "(function(){" +
+                "try{" +
+                "var b=document.querySelector('.ql-editor')||document.querySelector('[contenteditable=true]')||document.querySelector('textarea');" +
                 "if(!b){Native.onPoll('" + rid + "','',true);return;}" +
-                "window.__YB_BASE__=document.querySelectorAll('.hyc-common-markdown').length;" +
-                "b.focus();b.innerHTML='';" +
+                "var m=" + m + ";" +
+                "if(m){try{var btns=document.querySelectorAll('[class*=model],[class*=Model],[role=menuitem],.t-dropdown-menu .t-menu__item');" +
+                "for(var k=0;k<btns.length;k++){var t=(btns[k].innerText||'').trim();" +
+                "if(t&&m&&(t===m||t.indexOf(m)>=0)){btns[k].click();break;}}}catch(e2){}}" +
+                "var cnt=document.querySelectorAll('.hyc-common-markdown').length;" +
+                "if(cnt===0){cnt=document.querySelectorAll('.markdown-body, .markdown, [class*=markdown]').length;}" +
+                "window.__YB_BASE__=cnt;" +
                 "var s=" + q + ";" +
+                "if(b.tagName==='TEXTAREA'){" +
+                "b.focus();b.value='';b.value=s;" +
+                "b.dispatchEvent(new InputEvent('input',{inputType:'insertText',data:s,bubbles:true}));" +
+                "}else{" +
+                "b.focus();b.innerHTML='';" +
                 "for(var i=0;i<s.length;i++){var ch=s[i];" +
                 "b.dispatchEvent(new KeyboardEvent('keydown',{key:ch,bubbles:true}));" +
                 "b.dispatchEvent(new KeyboardEvent('keypress',{key:ch,bubbles:true}));" +
                 "b.textContent+=ch;" +
                 "b.dispatchEvent(new InputEvent('input',{inputType:'insertText',data:ch,bubbles:true}));" +
-                "b.dispatchEvent(new KeyboardEvent('keyup',{key:ch,bubbles:true}));}" +
-                "setTimeout(function(){b.dispatchEvent(new KeyboardEvent('keydown'," +
-                "{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));},350);" +
-                "window.__YB_POLL__('" + rid + "');})()"
+                "b.dispatchEvent(new KeyboardEvent('keyup',{key:ch,bubbles:true}));}}" +
+                "window.__YB_POLL__('" + rid + "');" +
+                "setTimeout(function(){try{b.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));}catch(e3){}},350);" +
+                "}catch(e){Native.onPoll('" + rid + "','',true);}" +
+                "})()"
             webView?.evaluateJavascript(POLL_FN, null)
             webView?.evaluateJavascript(js, null)
         }
@@ -143,15 +158,17 @@ class YuanbaoEngine private constructor(private val context: Context) {
     }
 
     private val POLL_FN = "(function(){if(window.__YB_POLL__)return;" +
+        "window.__YB_SEL__=function(){var a=document.querySelectorAll('.hyc-common-markdown');" +
+        "if(a.length)return a;return document.querySelectorAll('.markdown-body, .markdown, [class*=markdown]');};" +
         "window.__YB_POLL__=function(rid){" +
         "var tries=0;var stable=0;var last='';" +
         "var timer=setInterval(function(){" +
         "  tries++;" +
-        "  var items=document.querySelectorAll('.hyc-common-markdown');" +
+        "  var items=window.__YB_SEL__();" +
         "  var base=window.__YB_BASE__||0;" +
         "  if(items.length<=base){ if(tries>200){clearInterval(timer);Native.onPoll(rid,last,true);} return; }" +
         "  var el=items[items.length-1];" +
-        "  var txt=(el.innerText||'').trim();" +
+        "  var txt=(el.innerText||el.textContent||'').trim();" +
         "  if(txt===last){stable++;}else{stable=0;last=txt;Native.onPoll(rid,txt,false);}" +
         "  if(stable>=3&&txt.length>0){ clearInterval(timer);Native.onPoll(rid,txt,true);return; }" +
         "  if(tries>400){clearInterval(timer);Native.onPoll(rid,txt,true);}" +
