@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>元宝 API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="aurora"></div>
+
+<header class="app-header">
+  <div class="brand">
+    <div class="brand-logo">Y</div>
+    <div class="brand-text">
+      <div class="brand-title">元宝 API</div>
+      <div class="brand-sub">Local OpenAI Gateway</div>
+    </div>
+  </div>
+  <div class="badge" id="hdr-badge">离线</div>
+</header>
+
+<main class="scroll">
+
+  <!-- 主控 -->
+  <section class="glass hero">
+    <div class="hero-top">
+      <div class="pulse" id="pulse"></div>
+      <div>
+        <div class="hero-state" id="hero-state">未运行</div>
+        <div class="hero-desc" id="hero-desc">启动网关开始服务</div>
+      </div>
+    </div>
+    <div class="hero-actions">
+      <button class="btn-main" id="btn-toggle">启动网关</button>
+      <button class="btn-sub" id="btn-restart">重启</button>
+    </div>
+  </section>
+
+  <!-- 便当网格 -->
+  <section class="bento">
+    <div class="glass tile">
+      <div class="tile-val" id="stat-port">9990</div>
+      <div class="tile-lab">端口</div>
+    </div>
+    <div class="glass tile">
+      <div class="tile-val" id="stat-req">0</div>
+      <div class="tile-lab">请求</div>
+    </div>
+    <div class="glass tile">
+      <div class="tile-val" id="stat-acc">—</div>
+      <div class="tile-lab">账号</div>
+    </div>
+    <div class="glass tile">
+      <div class="tile-val" id="stat-model">4</div>
+      <div class="tile-lab">模型</div>
+    </div>
+  </section>
+
+  <!-- 接口地址 -->
+  <section class="glass addr-card">
+    <div class="addr-head">
+      <span class="addr-label">BASE URL</span>
+      <button class="mini-btn" id="btn-copy-url">复制</button>
+    </div>
+    <div class="addr" id="addr">http://127.0.0.1:9990/v1</div>
+  </section>
+
+  <!-- 日志 -->
+  <section class="glass log-card">
+    <div class="card-head">
+      <span>请求日志</span>
+      <button class="mini-btn" id="btn-clear-log">清空</button>
+    </div>
+    <div class="log" id="log"></div>
+  </section>
+
+</main>
+
+<!-- 设置抽屉 -->
+<div class="drawer-mask" id="drawer-mask"></div>
+<aside class="drawer" id="drawer">
+  <div class="drawer-head">
+    <div class="drawer-title">设置</div>
+    <button class="icon-btn" id="drawer-close">✕</button>
+  </div>
+
+  <div class="drawer-body">
+    <div class="glass sec">
+      <div class="sec-title">账号</div>
+      <div class="row">
+        <span>登录状态</span>
+        <span class="val" id="login-state">未登录</span>
+      </div>
+      <button class="btn-main block" id="btn-login">登录元宝</button>
+    </div>
+
+    <div class="glass sec">
+      <div class="sec-title">网关</div>
+      <div class="field">
+        <label>端口</label>
+        <input type="number" id="in-port" placeholder="9990">
+      </div>
+      <div class="field">
+        <label>API Key</label>
+        <input type="text" id="in-key" placeholder="sk-yuanbao-local">
+      </div>
+      <button class="btn-main block" id="btn-save">保存设置</button>
+    </div>
+
+    <div class="glass sec">
+      <div class="sec-title">偏好</div>
+      <div class="row">
+        <span>开机自启</span>
+        <label class="switch"><input type="checkbox" id="sw-auto"><i></i></label>
+      </div>
+      <div class="row">
+        <span>显示悬浮窗</span>
+        <label class="switch"><input type="checkbox" id="sw-float"><i></i></label>
+      </div>
+    </div>
+
+    <div class="glass sec">
+      <div class="sec-title">模型</div>
+      <div id="model-list" class="model-list"></div>
+    </div>
+
+    <div class="glass sec">
+      <div class="sec-title">权限</div>
+      <button class="btn-sub block" id="btn-overlay">悬浮窗权限</button>
+      <button class="btn-sub block" id="btn-battery">忽略电池优化</button>
+    </div>
+
+    <div class="foot-tip">QQ群 1107158432 · 教程与更新</div>
+  </div>
+</aside>
+
+<button class="fab" id="fab-settings">⚙</button>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

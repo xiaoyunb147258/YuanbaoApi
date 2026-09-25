@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">元宝 API</string>
+    <string name="channel_name">网关服务</string>
+    <string name="channel_desc">元宝 API 本地网关运行通知</string>
+</resources>

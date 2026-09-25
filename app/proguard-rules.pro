@@ -1,0 +1,4 @@
+-dontwarn okhttp3.**
+-dontwarn okio.**
+-keepattributes Signature
+-keep class dev.yuanbao2api.** { *; }
