@@ -32,7 +32,7 @@ class YuanbaoClient(private val engine: YuanbaoEngine) {
                 error.set(err)
                 latch.countDown()
             }
-        })
+        }, model.name)
         if (!latch.await(180, TimeUnit.SECONDS)) throw Exception("等待回复超时")
         error.get()?.let { throw Exception(it) }
         val r = full.toString()
