@@ -212,6 +212,19 @@ class _HomePageState extends State<HomePage> {
           ),
           const SizedBox(height: 10),
 
+          // 会话状态
+          Text('当前会话',
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: scheme.onSurfaceVariant)),
+          const SizedBox(height: 8),
+          _infoTile(context, 'conversation_id',
+              (state.conversationId == null || state.conversationId!.isEmpty)
+                  ? '(新会话)'
+                  : state.conversationId!),
+          const SizedBox(height: 20),
+
           // 接入信息
           Text('接入信息',
               style: TextStyle(

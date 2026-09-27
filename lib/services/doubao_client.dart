@@ -36,15 +36,17 @@ class DoubaoClient {
 
   /// 复刻 chat_completion 的 payload
   Map<String, dynamic> buildChatPayload(
-      String text, int needDeepThink, String? conversationId) {
+      String text, int needDeepThink, String? conversationId,
+      [String? localConvId]) {
     final needCreate =
         conversationId == null || conversationId.isEmpty || conversationId == '0';
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final nowSec = nowMs ~/ 1000;
+    final localId = localConvId ?? 'local_${nowMs}';
     return {
       'client_meta': {
-        'local_conversation_id': needCreate ? 'local_${nowMs}' : '',
-        'conversation_id': conversationId ?? '',
+        'local_conversation_id': localId,
+        'conversation_id': needCreate ? '' : (conversationId ?? ''),
         'bot_id': BOT_ID,
         'last_section_id': '',
         'last_message_index': null,

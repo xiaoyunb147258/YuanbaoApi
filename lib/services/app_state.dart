@@ -24,6 +24,7 @@ class AppState extends ChangeNotifier {
   bool connected = false;
   bool engineReady = false;
   String? conversationId;
+  String? localConvId;
   bool loading = false;
   ThemeMode themeMode = ThemeMode.system;
   bool floatingBall = false;
@@ -174,6 +175,7 @@ class AppState extends ChangeNotifier {
   void clearMessages() {
     messages.clear();
     conversationId = null;
+    localConvId = null;
     notifyListeners();
   }
 
@@ -201,14 +203,17 @@ class AppState extends ChangeNotifier {
     notifyListeners();
 
     try {
+      localConvId ??= 'local_${DateTime.now().millisecondsSinceEpoch}';
       final c = DoubaoClient(
           deviceId: bridge.deviceId, webId: bridge.webId, fp: bridge.fp);
       final url = '/chat/completion?${c.buildQueryString()}';
-      final payload = c.buildChatPayload(text, needDeepThink, conversationId);
+      final payload = c.buildChatPayload(
+          text, needDeepThink, conversationId, localConvId!);
       await for (final d
           in bridge.chatStream(url: url, payloadJson: jsonEncode(payload))) {
-        if (d['conversation_id'] != null && (conversationId == null || conversationId == '0')) {
-          conversationId = d['conversation_id'].toString();
+        final cid = d['conversation_id']?.toString();
+        if (cid != null && cid.isNotEmpty && cid != '0') {
+          conversationId = cid;
         }
         if (d['text'] != null) aiMsg.content += d['text'].toString();
         if (d['error'] != null) aiMsg.content += '\n[错误] ${d['error']}';
