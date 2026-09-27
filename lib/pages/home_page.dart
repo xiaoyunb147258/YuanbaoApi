@@ -82,8 +82,8 @@ class _HomePageState extends State<HomePage> {
               gradient: state.serverRunning
                   ? AppTheme.brandGradient
                   : LinearGradient(colors: [
-                      scheme.surfaceContainerHighest,
-                      scheme.surfaceContainerHighest,
+                      scheme.surfaceVariant,
+                      scheme.surfaceVariant,
                     ]),
               borderRadius: BorderRadius.circular(20),
             ),
@@ -210,7 +210,7 @@ class _HomePageState extends State<HomePage> {
             width: double.infinity,
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: scheme.surfaceContainerHighest.withOpacity(0.5),
+              color: scheme.surfaceVariant.withOpacity(0.5),
               borderRadius: BorderRadius.circular(14),
             ),
             child: SelectableText(
@@ -239,7 +239,7 @@ class _HomePageState extends State<HomePage> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest.withOpacity(0.5),
+        color: scheme.surfaceVariant.withOpacity(0.5),
         borderRadius: BorderRadius.circular(16),
       ),
       child: Column(

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:flutter_spinkit/flutter_spinkit.dart';
 import '../services/app_state.dart';
 import '../models/models.dart';
 import '../theme.dart';
@@ -128,8 +127,8 @@ class _ChatPageState extends State<ChatPage> {
                   state.loading
                       ? const Padding(
                           padding: EdgeInsets.all(14),
-                          child: SpinKitRing(
-                              color: AppTheme.brand, size: 22, lineWidth: 2),
+                          child: CircularProgressIndicator(
+                              color: AppTheme.brand, strokeWidth: 2),
                         )
                       : Container(
                           decoration: BoxDecoration(
@@ -182,7 +181,7 @@ class _ChatPageState extends State<ChatPage> {
             BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.82),
         decoration: BoxDecoration(
           gradient: isUser ? AppTheme.brandGradient : null,
-          color: isUser ? null : scheme.surfaceContainerHighest.withOpacity(0.6),
+          color: isUser ? null : scheme.surfaceVariant.withOpacity(0.6),
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(18),
             topRight: const Radius.circular(18),
@@ -228,7 +227,7 @@ class _ChatPageState extends State<ChatPage> {
               SelectableText(m.content,
                   style: const TextStyle(fontSize: 15, color: Colors.white))
             else if (m.content.isEmpty && m.isStreaming)
-              const SpinKitThreeBounce(color: AppTheme.brand, size: 18)
+              const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
             else
               SelectableText(m.content, style: const TextStyle(fontSize: 15)),
           ],
