@@ -46,13 +46,13 @@ class AppTheme {
       ),
       cardTheme: CardTheme(
         elevation: 0,
-        color: scheme.surfaceVariant.withOpacity(0.5),
+        color: scheme.surfaceContainerHighest.withOpacity(0.5),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         margin: EdgeInsets.zero,
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: scheme.surfaceVariant.withOpacity(0.4),
+        fillColor: scheme.surfaceContainerHighest.withOpacity(0.4),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
           borderSide: BorderSide.none,

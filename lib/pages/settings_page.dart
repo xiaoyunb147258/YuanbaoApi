@@ -47,15 +47,16 @@ class _SettingsPageState extends State<SettingsPage> {
           Card(
             child: ListTile(
               leading: Icon(
-                state.bridge.isReady ? Icons.check_circle : Icons.login,
-                color: state.bridge.isReady ? Colors.green : scheme.primary,
+                state.bridge.loggedIn ? Icons.check_circle : Icons.login,
+                color: state.bridge.loggedIn ? Colors.green : scheme.primary,
               ),
-              title: Text(state.bridge.isReady ? '已登录豆包' : '登录豆包账号'),
-              subtitle: const Text('在应用内网页登录，登录态自动保持'),
+              title: Text(state.bridge.loggedIn ? '已登录豆包' : '登录豆包账号'),
+              subtitle: const Text('在应用内网页登录，返回后点击下方保存'),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                Navigator.push(context,
+              onTap: () async {
+                await Navigator.push(context,
                     MaterialPageRoute(builder: (_) => const WebLoginPage()));
+                await state.refreshLoginState();
               },
             ),
           ),

@@ -1,6 +1,4 @@
 // 本地 OpenAI 兼容 API 服务器
-// 复刻 doubao2api 的 unified_server：在安卓设备上暴露 /v1/* 端点，
-// 让任何支持 OpenAI 协议的客户端 / Agent 都能把本机当作"豆包 API"使用。
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -8,6 +6,7 @@ import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
 import 'webview_bridge.dart';
+import 'doubao_client.dart';
 
 class ApiServer {
   HttpServer? _server;
@@ -15,7 +14,6 @@ class ApiServer {
   String apiKey;
   int port;
   bool running = false;
-
   final List<Map<String, String>> logs = [];
 
   ApiServer({required this.bridge, this.apiKey = '', this.port = 9090});
@@ -30,6 +28,12 @@ class ApiServer {
     if (logs.length > 100) logs.removeLast();
   }
 
+  DoubaoClient _client() => DoubaoClient(
+        deviceId: bridge.deviceId,
+        webId: bridge.webId,
+        fp: bridge.fp,
+      );
+
   Future<void> start() async {
     if (running) return;
     final router = Router();
@@ -38,7 +42,7 @@ class ApiServer {
       _log('GET', '/health', 200);
       return _json({
         'status': 'ok',
-        'logged_in': bridge.isReady,
+        'logged_in': bridge.loggedIn,
         'consecutive_failures': 0,
         'needs_captcha': false,
         'last_error_code': 0,
@@ -63,12 +67,12 @@ class ApiServer {
     router.get('/auth/status', (Request req) {
       _log('GET', '/auth/status', 200);
       return _json({
-        'logged_in': bridge.isReady,
+        'logged_in': bridge.loggedIn,
         'is_ready_flag': bridge.isReady,
-        'login_button_visible': !bridge.isReady,
+        'login_button_visible': !bridge.loggedIn,
         'page_url': 'https://www.doubao.com/chat/',
-        'device_id': '',
-        'web_id': '',
+        'device_id': bridge.deviceId,
+        'web_id': bridge.webId,
       });
     });
 
@@ -81,36 +85,36 @@ class ApiServer {
       try {
         j = jsonDecode(body) as Map<String, dynamic>;
       } catch (_) {
-        _log('POST', '/v1/chat/completions', 400);
         return _error(400, 'invalid json');
       }
       final model = j['model']?.toString() ?? 'doubao';
       final wantStream = j['stream'] == true;
-      final needDeepThink = model.contains('expert')
-          ? 3
-          : (model.contains('think') ? 1 : 0);
+      final needDeepThink =
+          model.contains('expert') ? 3 : (model.contains('think') ? 1 : 0);
       final messages = (j['messages'] as List?) ?? [];
       final text = _extractText(messages);
+      final convId = j['conversation_id']?.toString();
 
-      if (text.isEmpty) {
-        _log('POST', '/v1/chat/completions', 400);
-        return _error(400, 'empty messages');
-      }
-      if (!bridge.isReady) {
-        _log('POST', '/v1/chat/completions', 503);
-        return _error(503, 'not logged in');
-      }
+      if (text.isEmpty) return _error(400, 'empty messages');
+      if (!bridge.isReady) return _error(503, 'not logged in');
 
-      final payload = _buildPayload(text, needDeepThink);
+      final c = _client();
+      final url = '/chat/completion?${c.buildQueryString()}';
+      final payload = c.buildChatPayload(text, needDeepThink, convId);
+      final payloadJson = jsonEncode(payload);
 
       if (!wantStream) {
         final buf = StringBuffer();
-        final thinkBuf = StringBuffer();
+        String newConv = convId ?? '';
         try {
-          await for (final d in bridge.chatStream(payload)) {
+          await for (final d
+              in bridge.chatStream(url: url, payloadJson: payloadJson)) {
             if (d['text'] != null) buf.write(d['text']);
-            if (d['thinking'] != null) thinkBuf.write(d['thinking']);
-            if (d['done'] == true) break;
+            if (d['conversation_id'] != null &&
+                (newConv.isEmpty || newConv == '0')) {
+              newConv = d['conversation_id'].toString();
+            }
+            if (d['error'] != null) return _error(502, d['error'].toString());
           }
         } catch (e) {
           return _error(502, 'upstream error: $e');
@@ -121,13 +125,14 @@ class ApiServer {
           'object': 'chat.completion',
           'created': DateTime.now().millisecondsSinceEpoch ~/ 1000,
           'model': model,
+          'conversation_id': newConv,
           'choices': [
             {
               'index': 0,
               'message': {
                 'role': 'assistant',
                 'content': buf.toString(),
-                if (thinkBuf.isNotEmpty) 'reasoning_content': thinkBuf.toString(),
+                'conversation_id': newConv,
               },
               'finish_reason': 'stop',
             }
@@ -137,7 +142,7 @@ class ApiServer {
       } else {
         _log('POST', '/v1/chat/completions', 200);
         return Response.ok(
-          _sseStream(bridge.chatStream(payload), model),
+          _sseStream(bridge.chatStream(url: url, payloadJson: payloadJson), model),
           headers: {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
@@ -149,43 +154,81 @@ class ApiServer {
 
     router.post('/v1/images/generations', (Request req) async {
       if (!_checkAuth(req, '/v1/images/generations')) return _error(401, 'auth');
-      final body = await req.readAsString();
-      final j = jsonDecode(body) as Map<String, dynamic>;
+      final j = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
       final prompt = j['prompt']?.toString() ?? '';
-      final images = await _generateMedia(prompt, 2010);
+      final ratio = j['ratio']?.toString();
+      final c = _client();
+      final url = '/samantha/chat/completion?${c.buildQueryString()}';
+      final payload = c.buildSamanthaPayload(
+          text: prompt, contentType: 2009, skillType: 3, ratio: ratio);
+      final raw = await bridge.fetchOnce(
+          url: url, payloadJson: jsonEncode(payload), timeoutSeconds: 120);
+      final images = raw.startsWith('__ERROR__:') ? [] : c.parseImages(raw);
       _log('POST', '/v1/images/generations', 200);
       return _json({
         'created': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        'data': images.map((u) => {'url': u, 'revised_prompt': prompt}).toList(),
+        'data': images
+            .map((im) => {'url': im['url'], 'revised_prompt': prompt})
+            .toList(),
       });
     });
 
     router.post('/v1/video/generations', (Request req) async {
       if (!_checkAuth(req, '/v1/video/generations')) return _error(401, 'auth');
-      final body = await req.readAsString();
-      final j = jsonDecode(body) as Map<String, dynamic>;
+      final j = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
       final prompt = j['prompt']?.toString() ?? '';
-      final videos = await _generateMedia(prompt, 2020);
+      final ratio = j['ratio']?.toString();
+      final c = _client();
+      final url = '/samantha/chat/completion?${c.buildQueryString()}';
+      final payload = c.buildSamanthaPayload(
+          text: prompt, contentType: 2020, skillType: 17, ratio: ratio);
+      final raw = await bridge.fetchOnce(
+          url: url, payloadJson: jsonEncode(payload), timeoutSeconds: 60);
+      var videos = <Map<String, dynamic>>[];
+      if (!raw.startsWith('__ERROR__:')) {
+        final taskId = c.extractVideoTaskId(raw);
+        if (taskId != null) {
+          final poll =
+              await bridge.fetchOnce(url: url, payloadJson: jsonEncode({'task_id': taskId, 'event_id': 0}), timeoutSeconds: 300);
+          if (!poll.startsWith('__ERROR__:')) {
+            videos = c.parseVideos(poll);
+          }
+        }
+      }
       _log('POST', '/v1/video/generations', 200);
       return _json({
         'created': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        'data': videos.map((u) => {'video_url': u, 'cover_url': '', 'duration': 0}).toList(),
+        'data': videos,
       });
     });
 
     router.post('/v1/audio/generations', (Request req) async {
       if (!_checkAuth(req, '/v1/audio/generations')) return _error(401, 'auth');
-      final body = await req.readAsString();
-      final j = jsonDecode(body) as Map<String, dynamic>;
+      final j = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
       final prompt = j['prompt']?.toString() ?? '';
-      final audios = await _generateMedia(prompt, 2005);
+      final lyric = j['lyric']?.toString();
+      final genre = j['genre']?.toString();
+      final c = _client();
+      final url = '/samantha/chat/completion?${c.buildQueryString()}';
+      final payload = c.buildSamanthaPayload(
+          text: prompt, contentType: 2005, skillType: 9, lyric: lyric, genre: genre);
+      final raw = await bridge.fetchOnce(
+          url: url, payloadJson: jsonEncode(payload), timeoutSeconds: 300);
+      final tracks = raw.startsWith('__ERROR__:') ? [] : c.parseMusic(raw);
       _log('POST', '/v1/audio/generations', 200);
       return _json({
         'created': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        'data': audios
-            .map((u) => {'audio_url': u, 'title': '', 'duration': 0, 'lyrics': '', 'cover_url': ''})
-            .toList(),
+        'data': tracks,
       });
+    });
+
+    router.post('/v1/files', (Request req) {
+      _log('POST', '/v1/files', 501);
+      return _error(501, 'file upload not implemented in this build');
+    });
+    router.post('/v1/images/upload', (Request req) {
+      _log('POST', '/v1/images/upload', 501);
+      return _error(501, 'image upload not implemented in this build');
     });
 
     router.post('/v1/session/qr-login', (Request req) {
@@ -193,12 +236,11 @@ class ApiServer {
       return _json({'status': 'pending', 'message': '请在 App 内网页完成登录'});
     });
     router.get('/v1/session/qr-login', (Request req) {
-      return _json({'status': bridge.isReady ? 'success' : 'pending'});
+      return _json({'status': bridge.loggedIn ? 'success' : 'pending'});
     });
 
     final handler =
         const Pipeline().addMiddleware(logRequests()).addHandler(router.call);
-
     _server = await shelf_io.serve(handler, InternetAddress.anyIPv4, port);
     running = true;
   }
@@ -234,53 +276,15 @@ class ApiServer {
     return '';
   }
 
-  Map<String, dynamic> _buildPayload(String text, int needDeepThink) {
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    final rand = '${ts}_${ts.toRadixString(16)}';
-    return {
-      'messages': [
-        {
-          'content': jsonEncode({'text': text}),
-          'content_type': 2001,
-          'attachments': [],
-          'references': [],
-        }
-      ],
-      'completion_option': {
-        'is_regen': false,
-        'with_suggest': true,
-        'need_create_conversation': true,
-        'launch_stage': 1,
-        'is_replace': false,
-        'is_delete': false,
-        'is_ai_playground': false,
-        'memory_type': 2,
-        'message_from': 0,
-        'use_deep_think': needDeepThink > 0,
-        'use_auto_cot': needDeepThink == 3,
-        'resend_for_regen': false,
-        'enable_commerce_credit': false,
-      },
-      'evaluate_option': {'web_ab_params': ''},
-      'local_conversation_id': rand,
-      'local_message_id': rand,
-    };
-  }
-
   Stream<List<int>> _sseStream(
       Stream<Map<String, dynamic>> src, String model) async* {
     final id = 'chatcmpl-${DateTime.now().millisecondsSinceEpoch}';
     final created = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     yield utf8.encode(_chunk(id, created, model, {'role': 'assistant'}, null));
     await for (final d in src) {
-      if (d['done'] == true) break;
       if (d['error'] != null) {
         yield utf8.encode(_chunk(id, created, model, {}, 'error'));
         break;
-      }
-      if (d['thinking'] != null) {
-        yield utf8.encode(
-            _chunk(id, created, model, {'reasoning_content': d['thinking']}, null));
       }
       if (d['text'] != null) {
         yield utf8.encode(_chunk(id, created, model, {'content': d['text']}, null));
@@ -302,35 +306,14 @@ class ApiServer {
         })}\n\n';
   }
 
-  Future<List<String>> _generateMedia(String prompt, int contentType) async {
-    final urls = <String>[];
-    final payload = _buildPayload(prompt, 0);
-    final msgs = payload['messages'] as List;
-    if (msgs.isNotEmpty) {
-      final first = msgs[0] as Map;
-      first['content_type'] = contentType;
-    }
-    try {
-      await for (final d in bridge.chatStream(payload)) {
-        if (d['image'] != null) urls.add(d['image'].toString());
-        if (d['done'] == true) break;
-      }
-    } catch (_) {}
-    return urls;
-  }
-
   Response _json(Map<String, dynamic> data) {
-    return Response.ok(
-      jsonEncode(data),
-      headers: {'Content-Type': 'application/json'},
-    );
+    return Response.ok(jsonEncode(data),
+        headers: {'Content-Type': 'application/json'});
   }
 
   Response _error(int code, String msg) {
-    return Response(
-      code,
-      body: jsonEncode({'error': {'message': msg, 'type': 'error'}}),
-      headers: {'Content-Type': 'application/json'},
-    );
+    return Response(code,
+        body: jsonEncode({'error': {'message': msg, 'type': 'error'}}),
+        headers: {'Content-Type': 'application/json'});
   }
 }

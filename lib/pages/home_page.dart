@@ -82,8 +82,8 @@ class _HomePageState extends State<HomePage> {
               gradient: state.serverRunning
                   ? AppTheme.brandGradient
                   : LinearGradient(colors: [
-                      scheme.surfaceVariant,
-                      scheme.surfaceVariant,
+                      scheme.surfaceContainerHighest,
+                      scheme.surfaceContainerHighest,
                     ]),
               borderRadius: BorderRadius.circular(20),
             ),
@@ -165,12 +165,23 @@ class _HomePageState extends State<HomePage> {
           Row(
             children: [
               Expanded(
-                child: _statCard(
-                  context,
-                  '登录状态',
-                  state.bridge.isReady ? '已登录' : '未登录',
-                  state.bridge.isReady ? Icons.check_circle : Icons.warning_amber,
-                  state.bridge.isReady ? Colors.green : Colors.orange,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: () async {
+                    final ok = await state.refreshLoginState();
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                        content: Text(ok ? '已保存：检测到登录状态' : '未检测到登录，请先登录')));
+                  },
+                  child: _statCard(
+                    context,
+                    '登录状态（点击刷新）',
+                    state.bridge.loggedIn ? '已登录' : '未登录',
+                    state.bridge.loggedIn
+                        ? Icons.check_circle
+                        : Icons.warning_amber,
+                    state.bridge.loggedIn ? Colors.green : Colors.orange,
+                  ),
                 ),
               ),
               const SizedBox(width: 12),
@@ -185,7 +196,21 @@ class _HomePageState extends State<HomePage> {
               ),
             ],
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              icon: const Icon(Icons.save, size: 18),
+              label: const Text('保存登录状态'),
+              onPressed: () async {
+                final ok = await state.refreshLoginState();
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: Text(ok ? '登录状态已保存' : '未登录，请先在设置中登录豆包')));
+              },
+            ),
+          ),
+          const SizedBox(height: 10),
 
           // 接入信息
           Text('接入信息',
@@ -210,7 +235,7 @@ class _HomePageState extends State<HomePage> {
             width: double.infinity,
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: scheme.surfaceVariant.withOpacity(0.5),
+              color: scheme.surfaceContainerHighest.withOpacity(0.5),
               borderRadius: BorderRadius.circular(14),
             ),
             child: SelectableText(
@@ -239,7 +264,7 @@ class _HomePageState extends State<HomePage> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: scheme.surfaceVariant.withOpacity(0.5),
+        color: scheme.surfaceContainerHighest.withOpacity(0.5),
         borderRadius: BorderRadius.circular(16),
       ),
       child: Column(

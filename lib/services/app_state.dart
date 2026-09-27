@@ -1,14 +1,14 @@
 // 应用全局状态管理
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/models.dart';
-import 'api_client.dart';
 import 'api_server.dart';
 import 'webview_bridge.dart';
+import 'doubao_client.dart';
 import 'system_channel.dart';
 
 class AppState extends ChangeNotifier {
-  late ApiClient api;
   late ApiServer server;
   final WebViewBridge bridge = WebViewBridge();
   final List<ChatMessage> messages = [];
@@ -30,7 +30,6 @@ class AppState extends ChangeNotifier {
   bool keepAlive = true;
 
   AppState() {
-    api = ApiClient(bridge: bridge);
     server = ApiServer(bridge: bridge);
     _load();
   }
@@ -53,10 +52,6 @@ class AppState extends ChangeNotifier {
   }
 
   void _apply() {
-    api.backendUrl = backendUrl;
-    api.backendKey = backendKey;
-    api.useBackend = useBackend;
-    api.bridge = bridge;
     server.apiKey = apiKey;
     server.port = serverPort;
   }
@@ -65,6 +60,16 @@ class AppState extends ChangeNotifier {
     engineReady = true;
     connected = true;
     notifyListeners();
+  }
+
+  /// 重新检测登录态（登录后手动保存时调用）
+  Future<bool> refreshLoginState() async {
+    await bridge.refreshLogin();
+    await bridge.extractParams();
+    await Future.delayed(const Duration(milliseconds: 800));
+    connected = bridge.loggedIn;
+    notifyListeners();
+    return bridge.loggedIn;
   }
 
   Future<bool> startServer() async {
@@ -161,7 +166,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<bool> checkConnection() async {
-    connected = bridge.isReady;
+    connected = bridge.loggedIn;
     notifyListeners();
     return connected;
   }
@@ -196,27 +201,17 @@ class AppState extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final stream = api.chatStream(
-        messages: messages.where((m) => !m.isStreaming).toList(),
-        needDeepThink: needDeepThink,
-        conversationId: conversationId,
-      );
-      await for (final delta in stream) {
-        if (delta['conversation_id'] != null) {
-          conversationId = delta['conversation_id'].toString();
+      final c = DoubaoClient(
+          deviceId: bridge.deviceId, webId: bridge.webId, fp: bridge.fp);
+      final url = '/chat/completion?${c.buildQueryString()}';
+      final payload = c.buildChatPayload(text, needDeepThink, conversationId);
+      await for (final d
+          in bridge.chatStream(url: url, payloadJson: jsonEncode(payload))) {
+        if (d['conversation_id'] != null && (conversationId == null || conversationId == '0')) {
+          conversationId = d['conversation_id'].toString();
         }
-        if (delta['thinking'] != null) {
-          aiMsg.thinking += delta['thinking'].toString();
-        }
-        if (delta['text'] != null) {
-          aiMsg.content += delta['text'].toString();
-        }
-        if (delta['image'] != null) {
-          aiMsg.imageUrls.add(delta['image'].toString());
-        }
-        if (delta['error'] != null) {
-          aiMsg.content += '\n[错误] ${delta['error']}';
-        }
+        if (d['text'] != null) aiMsg.content += d['text'].toString();
+        if (d['error'] != null) aiMsg.content += '\n[错误] ${d['error']}';
         notifyListeners();
       }
     } catch (e) {

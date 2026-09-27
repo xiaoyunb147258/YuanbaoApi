@@ -1,33 +1,38 @@
-// WebView 桥接 - 复刻 doubao2api 的 browser_client 原理
-// 在隐藏的 WebView 中加载豆包网页，利用豆包自身 JS 完成 a_bogus / msToken 签名，
-// 再通过注入的 JS 在其页面上下文中发起 fetch 请求，实现 100% 可用的直连。
+// WebView 桥接 - 严格复刻 doubao2api browser_client.py 的协议
+// 加载豆包网页，复用其 fetch hook（自动注入 a_bogus/msToken），
+// 通过注入 JS 在页面上下文发起请求并回传响应。
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-
-typedef StreamCallback = void Function(Map<String, dynamic> delta);
 
 class WebViewBridge {
   WebViewController? _controller;
   bool ready = false;
   bool loggedIn = false;
   Completer<void>? _readyCompleter;
-  final Map<String, StreamCallback> _streams = {};
+  final Map<String, void Function(String?)> _streams = {};
   int _seq = 0;
+
+  // device params (extracted from page like the original)
+  String deviceId = '';
+  String webId = '';
+  String fp = '';
 
   WebViewController createController({required VoidCallback onPageFinished}) {
     final c = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Colors.transparent)
-      ..addJavaScriptChannel('FlutterBridge', onMessageReceived: _onJsMessage)
+      ..addJavaScriptChannel('DBBridge', onMessageReceived: _onJsMessage)
       ..setNavigationDelegate(NavigationDelegate(
-        onPageFinished: (_) {
+        onPageFinished: (_) async {
           ready = true;
           if (_readyCompleter != null && !_readyCompleter!.isCompleted) {
             _readyCompleter!.complete();
           }
-          _injectHelper();
+          await injectHelper();
+          await extractParams();
+          await refreshLogin();
           onPageFinished();
         },
       ))
@@ -41,62 +46,94 @@ class WebViewBridge {
   Future<void> waitReady() {
     if (ready) return Future.value();
     _readyCompleter = Completer<void>();
-    return _readyCompleter!.future.timeout(const Duration(seconds: 30),
-        onTimeout: () {});
+    return _readyCompleter!.future
+        .timeout(const Duration(seconds: 40), onTimeout: () {});
   }
 
-  // 注入 JS 辅助函数：把 SSE 流解析后通过 FlutterBridge 回传
-  Future<void> _injectHelper() async {
-    final js = r'''
-(function(){
-  if (window.__bridgeInjected) return;
-  window.__bridgeInjected = true;
-  window.__chatStream = async function(id, payload) {
-    try {
-      const params = "aid=497858&device_platform=web&version_code=20800&language=zh&pkg_type=release_version&real_aid=497858&samantha_web=1&use-olympus-account=0";
-      const resp = await fetch("https://www.doubao.com/samantha/chat/completion?" + params, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify(payload)
-      });
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop();
-        for (const line of lines) {
-          const t = line.trim();
-          if (!t.startsWith("data:")) continue;
-          const data = t.substring(5).trim();
-          if (!data || data === "[DONE]") continue;
-          FlutterBridge.postMessage(JSON.stringify({ id: id, data: data }));
+  /// 检测登录态：登录按钮存在 = 未登录
+  Future<void> refreshLogin() async {
+    await _controller?.runJavaScript(
+      "try{var b=document.querySelectorAll('button'),h=false;"
+      "for(var i=0;i<b.length;i++){if((b[i].innerText||'').trim()==='登录'){h=true;break;}}"
+      "DBBridge.postMessage(JSON.stringify({kind:'login',value:!h}));"
+      "}catch(e){DBBridge.postMessage(JSON.stringify({kind:'login',value:false}));}",
+    );
+  }
+
+  /// 提取 device_id / web_id / fp
+  Future<void> extractParams() async {
+    await _controller?.runJavaScript(
+      "(function(){var r={};try{var a=JSON.parse(localStorage.getItem('samantha_web_web_id')||'{}');r.d=a.web_id||'';}catch(e){}"
+      "try{var t=JSON.parse(localStorage.getItem('__tea_cache_tokens_497858')||'{}');r.w=t.web_id||'';}catch(e){}"
+      "var c=document.cookie.split(';').map(function(x){return x.trim();}).find(function(x){return x.indexOf('s_v_web_id=')===0;});"
+      "r.f=c?c.split('=')[1]:'';"
+      "DBBridge.postMessage(JSON.stringify({kind:'params',d:r.d,w:r.w,f:r.f}));})();",
+    );
+  }
+
+  /// 注入请求辅助函数
+  Future<void> injectHelper() async {
+    await _controller?.runJavaScript('''
+window.__dbFetch = async function(rid, path, body){
+  try {
+    var m = document.cookie.match(/passport_csrf_token=([^;]+)/);
+    var h = {'Content-Type':'application/json','agw-js-conv':'str, str'};
+    if(m) h['x-tt-passport-csrf-token'] = m[1];
+    var res = await fetch(path, {method:'POST', headers:h, body:body, credentials:'include'});
+    if(!res.ok){var t=await res.text();
+      DBBridge.postMessage(JSON.stringify({kind:'stream',id:rid,httpError:res.status,body:t.slice(0,400)}));
+      DBBridge.postMessage(JSON.stringify({kind:'stream',id:rid,done:true}));return;}
+    var r = res.body.getReader(), d = new TextDecoder(), buf='', ev='';
+    while(true){
+      var g = await r.read(); if(g.done) break;
+      buf += d.decode(g.value, {stream:true});
+      var ls = buf.split('\\n'); buf = ls.pop();
+      for(var i=0;i<ls.length;i++){
+        var t = ls[i].trim();
+        if(!t) continue;
+        if(t.indexOf('event: ')===0){ev=t.slice(7);continue;}
+        if(t.indexOf('id: ')===0) continue;
+        if(t.indexOf('data: ')===0){
+          var ds=t.slice(6);
+          if(ds && ds!=='{}') DBBridge.postMessage(JSON.stringify({kind:'stream',id:rid,event:ev,data:ds}));
         }
       }
-      FlutterBridge.postMessage(JSON.stringify({ id: id, done: true }));
-    } catch (e) {
-      FlutterBridge.postMessage(JSON.stringify({ id: id, error: String(e) }));
     }
-  };
-
-  window.__checkLogin = function() {
-    const logged = !document.querySelector("[class*=login]");
-    FlutterBridge.postMessage(JSON.stringify({ check: "login", value: logged }));
-  };
-})();
-''';
-    await _controller?.runJavaScript(js);
+    DBBridge.postMessage(JSON.stringify({kind:'stream',id:rid,done:true}));
+  } catch(e){
+    DBBridge.postMessage(JSON.stringify({kind:'stream',id:rid,error:String(e)}));
+    DBBridge.postMessage(JSON.stringify({kind:'stream',id:rid,done:true}));
+  }
+};
+window.__dbOnce = async function(rid, path, body){
+  try {
+    var m = document.cookie.match(/passport_csrf_token=([^;]+)/);
+    var h = {'Content-Type':'application/json','agw-js-conv':'str, str'};
+    if(m) h['x-tt-passport-csrf-token'] = m[1];
+    var res = await fetch(path, {method:'POST', headers:h, body:body, credentials:'include'});
+    var t = await res.text();
+    DBBridge.postMessage(JSON.stringify({kind:'once',id:rid,body:t}));
+    DBBridge.postMessage(JSON.stringify({kind:'once',id:rid,done:true}));
+  } catch(e){
+    DBBridge.postMessage(JSON.stringify({kind:'once',id:rid,error:String(e)}));
+    DBBridge.postMessage(JSON.stringify({kind:'once',id:rid,done:true}));
+  }
+};
+''');
   }
 
   void _onJsMessage(JavaScriptMessage msg) {
     try {
       final j = jsonDecode(msg.message) as Map<String, dynamic>;
-      if (j['check'] == 'login') {
+      final kind = j['kind'];
+      if (kind == 'login') {
         loggedIn = j['value'] == true;
+        return;
+      }
+      if (kind == 'params') {
+        deviceId = j['d']?.toString() ?? '';
+        webId = j['w']?.toString() ?? '';
+        fp = j['f']?.toString() ?? '';
         return;
       }
       final id = j['id']?.toString();
@@ -104,99 +141,159 @@ class WebViewBridge {
       final cb = _streams[id];
       if (cb == null) return;
       if (j['done'] == true) {
-        cb({'done': true});
+        cb(null);
         _streams.remove(id);
+        return;
+      }
+      if (j['httpError'] != null) {
+        cb('__HTTP_ERROR__:${j['httpError']}:${j['body'] ?? ''}');
         return;
       }
       if (j['error'] != null) {
-        cb({'error': j['error'].toString()});
-        _streams.remove(id);
+        cb('__ERROR__:${j['error']}');
         return;
       }
       if (j['data'] != null) {
-        cb({'raw': j['data'].toString()});
+        cb('EVENT:${j['event'] ?? ''}|${j['data']}');
+        return;
+      }
+      if (j['body'] != null) {
+        cb('__ONCE__:${j['body']}');
+        return;
       }
     } catch (_) {}
   }
 
-  // 发起流式对话，返回解析后的增量流
-  Stream<Map<String, dynamic>> chatStream(Map<String, dynamic> payload) {
-    final id = 'stream_${_seq++}';
-    final controller = StreamController<Map<String, dynamic>>();
-    _streams[id] = (delta) {
-      if (delta['done'] == true) {
-        controller.close();
+  Stream<Map<String, dynamic>> chatStream(
+      {required String url, required String payloadJson}) {
+    final id = 'r${_seq++}';
+    final ctrl = StreamController<Map<String, dynamic>>();
+    _streams[id] = (chunk) {
+      if (chunk == null) {
+        if (!ctrl.isClosed) ctrl.close();
         return;
       }
-      if (delta['error'] != null) {
-        controller.add({'error': delta['error']});
-        controller.close();
+      if (chunk.startsWith('__HTTP_ERROR__:')) {
+        if (!ctrl.isClosed) ctrl.add({'error': chunk});
         return;
       }
-      if (delta['raw'] != null) {
-        final parsed = _parseSse(delta['raw'].toString());
-        if (parsed != null) controller.add(parsed);
+      if (chunk.startsWith('__ERROR__:')) {
+        if (!ctrl.isClosed) ctrl.add({'error': chunk.substring(10)});
+        return;
+      }
+      String event = '';
+      String data = chunk;
+      if (chunk.startsWith('EVENT:')) {
+        final idx = chunk.indexOf('|');
+        event = chunk.substring(6, idx);
+        data = chunk.substring(idx + 1);
+      }
+      final parsed = parseEvent(event, data);
+      if (parsed != null && !ctrl.isClosed) ctrl.add(parsed);
+    };
+    final js =
+        'window.__dbFetch("$id", ${jsonEncode(url)}, ${jsonEncode(payloadJson)});';
+    _controller?.runJavaScript(js);
+    return ctrl.stream;
+  }
+
+  Future<String> fetchOnce(
+      {required String url,
+      required String payloadJson,
+      int timeoutSeconds = 300}) async {
+    final id = 'o${_seq++}';
+    final completer = Completer<String>();
+    final buf = StringBuffer();
+    _streams[id] = (chunk) {
+      if (chunk == null) {
+        if (!completer.isCompleted) completer.complete(buf.toString());
+      } else if (chunk.startsWith('__ONCE__:')) {
+        buf.write(chunk.substring(8));
+      } else if (chunk.startsWith('__HTTP_ERROR__:') ||
+          chunk.startsWith('__ERROR__:')) {
+        if (!completer.isCompleted) completer.complete('__ERROR__:$chunk');
       }
     };
-    _runJsChat(id, payload);
-    return controller.stream;
-  }
-
-  Future<void> _runJsChat(String id, Map<String, dynamic> payload) async {
-    final payloadJson = jsonEncode(payload);
-    final js = 'window.__chatStream("$id", $payloadJson);';
+    final js = 'window.__dbOnce("$id", ${jsonEncode(url)}, ${jsonEncode(payloadJson)});';
     await _controller?.runJavaScript(js);
+    return completer.future.timeout(Duration(seconds: timeoutSeconds + 20),
+        onTimeout: () => buf.toString());
   }
 
-  // 解析豆包 SSE 单条事件（复刻 doubao2api sse.py 的核心逻辑）
-  Map<String, dynamic>? _parseSse(String raw) {
+  /// 解析 /chat/completion 事件（复刻 _extract_text + extract_conversation_id）
+  Map<String, dynamic>? parseEvent(String event, String data) {
+    Map<String, dynamic> j;
     try {
-      final j = jsonDecode(raw) as Map<String, dynamic>;
-      final eventType = j['event_type'];
-      final result = <String, dynamic>{};
+      j = jsonDecode(data) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+    final result = <String, dynamic>{};
+    final ack = j['ack_client_meta'];
+    if (ack is Map && ack['conversation_id'] != null) {
+      result['conversation_id'] = ack['conversation_id'].toString();
+    }
+    final meta = j['meta'];
+    if (meta is Map && meta['conversation_id'] != null) {
+      result['conversation_id'] = meta['conversation_id'].toString();
+    }
+    final text = extractText(event, j);
+    if (text.isNotEmpty) result['text'] = text;
+    return result.isEmpty ? null : result;
+  }
 
-      if (eventType == 2002) {
-        final cid = j['conversation_id']?.toString() ??
-            (j['message'] is Map ? j['message']['conversation_id']?.toString() : null);
-        if (cid != null) result['conversation_id'] = cid;
-        return result.isEmpty ? null : result;
-      }
-      if (eventType == 2003) return {'done': true};
-      if (eventType == 2005) {
-        return {'error': j['message']?.toString() ?? 'stream error'};
-      }
-      if (eventType == 2001) {
-        final ct = j['content_type'];
-        final msg = j['message'];
-        String? content;
-        if (msg is Map && msg['content'] is String) {
-          content = msg['content'];
-        } else if (msg is String) {
-          content = msg;
-        }
-        if (ct == 10040) return {'thinkingStart': true};
-        if (ct == 10000) {
-          if (content != null && content.isNotEmpty) return {'text': content};
-          return null;
-        }
-        if (ct == 2008) {
-          if (content != null) return {'thinking': content};
-          return null;
-        }
-        if (ct == 2001) {
-          if (content != null && content.isNotEmpty) return {'text': content};
-          return null;
-        }
-        if (ct == 2010) {
-          if (msg is Map) {
-            final url = msg['image_url']?.toString() ?? msg['url']?.toString();
-            if (url != null) return {'image': url};
+  String extractText(String event, Map<String, dynamic> e) {
+    if (event == 'CHUNK_DELTA' && e['text'] != null) return e['text'].toString();
+    final patchOp = e['patch_op'];
+    if (patchOp is List) {
+      for (final op in patchOp) {
+        if (op is! Map) continue;
+        final pv = op['patch_value'];
+        if (pv is Map) {
+          final cb = pv['content_block'];
+          if (cb is List) {
+            for (final block in cb) {
+              if (block is! Map) continue;
+              final content = block['content'];
+              if (content is Map) {
+                final tb = content['text_block'];
+                if (tb is Map &&
+                    tb['text'] != null &&
+                    tb['text'].toString().isNotEmpty) {
+                  return tb['text'].toString();
+                }
+              }
+            }
           }
-          return null;
+          if (op['patch_object'] == 102) {
+            final raw = pv['content'];
+            if (raw is String && raw.isNotEmpty) {
+              try {
+                final p = jsonDecode(raw);
+                if (p is Map && p['text'] != null) return p['text'].toString();
+              } catch (_) {}
+            }
+          }
         }
       }
-    } catch (_) {}
-    return null;
+    }
+    if (event == 'STREAM_MSG_NOTIFY') {
+      final content = e['content'];
+      if (content is Map) {
+        final cb = content['content_block'];
+        if (cb is List) {
+          for (final block in cb) {
+            if (block is! Map) continue;
+            final c2 = block['content'];
+            if (c2 is Map) {
+              final tb = c2['text_block'];
+              if (tb is Map && tb['text'] != null) return tb['text'].toString();
+            }
+          }
+        }
+      }
+    }
+    return '';
   }
 
   Future<void> reload() async {
